@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Hoho3D | Prototype Phaser</title>
+  <style>
+    html, body { margin:0; padding:0; height:100%; background:#111; color:#eee; font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu; }
+  #game-container { width:100vw; height:100vh; outline:none; display:block; }
+    .fallback-logo { position:fixed; left:12px; bottom:8px; opacity:0.5; font-size:12px; pointer-events:none; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3/dist/phaser.js"></script>
+  <!-- Supabase client ESM loader -->
+  <script type="module">
+    import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+    window.createSupabaseClient = (url,key,opts)=> createClient(url,key,opts);
+  </script>
+</head>
+<body>
+  <div id="game-container"></div>
+  <div class="fallback-logo">Hoho3D</div>
+  <script>window.addEventListener('contextmenu', e => e.preventDefault());</script>
+  <script type="module" src="./src/main.js"></script>
+</body>
+</html>

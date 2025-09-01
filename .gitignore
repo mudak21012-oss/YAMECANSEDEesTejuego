@@ -1,0 +1,41 @@
+## Node/JS related (if later you add tooling)
+node_modules/
+dist/
+build/
+.DS_Store
+*.log
+
+## OS / editor
+*.swp
+*.bak
+*.tmp
+*.orig
+.idea/
+.vscode/
+
+## Media cache (keep source media but ignore accidental large raws)
+*.psd
+*.ai
+*.wav
+*.zip
+*.tar
+*.tar.gz
+*.7z
+
+## Git ignore backup repo data
+.git_prev_*/
+
+## Environment / local secrets (add if used)
+.env
+.env.local
+
+## Python cache (tools folder has .py)
+__pycache__/
+*.py[cod]
+
+## Optional: uncomment to ignore large video assets if you later move them to CDN/LFS
+# assets/fondo/*.mp4
+# assets/fondo/*.webm
+
+## Fonts binary (keep tracked now; remove if you move to CDN)
+# assets/Fonts/*.ttf

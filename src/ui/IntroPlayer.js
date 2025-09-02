@@ -23,10 +23,8 @@ export default class IntroPlayer {
     g.fillStyle(0x1e2833, 0.95).fillRoundedRect(0,0, maxW, maxH, 12);
     this.panel = g;
 
-  // Vídeo (mute, usamos audio separado). No loop.
-  this.video = scene.add.video(0, 0, "intro_vid").setOrigin(0,0).setMute(true);
-  this.video.setLoop(false);
-  this.video.once('play', ()=> { this.layout(); });
+    // Vídeo (mute, usamos audio separado)
+    this.video = scene.add.video(0, 0, "intro_vid").setOrigin(0,0).setMute(true);
 
     // Hit area para desbloqueo
     this.hit = scene.add.rectangle(0,0, maxW, maxH, 0x000000, 0.0001).setOrigin(0,0).setInteractive({ useHandCursor:true });
@@ -47,53 +45,14 @@ export default class IntroPlayer {
     this.sound = scene.sound.add("intro_bgm", { loop:false, volume:1 });
 
     this._started = false;
-    this._videoStarted = false;
-    this._playAttempts = 0;
-    const markStarted = () => { this._videoStarted = true; this.hint.setVisible(false); };
-    this.video.on('playing', markStarted);
-    this.video.on('play', markStarted);
-    this.video.on('timeupdate', ()=> { if(!this._videoStarted && this.video.getCurrentTime()>0.05) markStarted(); });
-    this.video.on('error', (e)=> console.warn('[IntroPlayer] Video error', e));
-
-    const attemptVideo = () => {
-      this._playAttempts++;
-      let p;
-      try { p = this.video.play(false); } catch(e){ console.warn('[IntroPlayer] video.play throw', e); }
-      if(p && p.catch){
-        p.catch(err=> console.warn('[IntroPlayer] video.play promise reject', err));
-      }
-      // Fallback directo al elemento HTMLVideo
-      const el = this.video.video;
-      if(el){
-        if(el.readyState < 2){
-          el.addEventListener('loadeddata', ()=> { if(!this._videoStarted) attemptVideo(); }, { once:true });
-        } else {
-          if(el.paused){
-            el.muted = true;
-            el.loop = false;
-            el.playsInline = true;
-            el.play().catch(err=> console.warn('[IntroPlayer] element.play reject', err));
-          }
-        }
-      }
-      // Reintento si tras 500ms no avanzó
-      this.scene.time.delayedCall(550, ()=> {
-        if(!this._videoStarted && this._playAttempts < 4 && !this._closed){
-          console.log('[IntroPlayer] Reintentando video intento', this._playAttempts+1);
-          attemptVideo();
-        } else if(!this._videoStarted && this._playAttempts>=4){
-          this.hint.setVisible(true).setText('VIDEO NO DISPONIBLE');
-        }
-      });
-    };
-
     const startPlayback = () => {
       if (this._started) return;
       this._started = true;
       try { scene.sound.unlock?.(); } catch {}
-      this.hint.setText('CARGANDO...').setVisible(true);
-      try { this.sound.play(); } catch(e){ console.warn('[IntroPlayer] sound.play error', e); }
-      attemptVideo();
+      try { this.video.play(true); } catch {}
+      try { this.sound.play(); } catch {}
+      this.video.setMute(true);
+      this.hint.setVisible(false);
     };
     this.hit.on("pointerup", startPlayback);
 

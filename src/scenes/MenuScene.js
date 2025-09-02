@@ -1,15 +1,22 @@
 import { PixelUiFactory } from "../utils/PixelUiFactory.js";
 import LeaderboardPanel from "../ui/LeaderboardPanel.js";
 import { authGetSession, authLogout } from "../services/AuthFacade.js";
+import UserPanel from "../ui/UserPanel.js";
 import PixelAuthPanel from "../ui/PixelAuthPanel.js"; // (mantener import para evitar romper dependencias cruzadas)
 import { getSupabase } from "../services/supabaseClient.js";
 import { stampPixelLogo } from "../utils/pixelLogo.js";
 import { getSoundManager } from "../audio/SoundManager.js";
+import IntroPlayer from "../ui/IntroPlayer.js";
 
 export default class MenuScene extends Phaser.Scene {
   constructor(){ super("Menu"); }
+  _caretBlink = false;
+  _caretTimer = null;
 
   async create(data){
+  // Flag para controlar si la sesión persiste entre reloads.
+  const PERSIST_SESSION = false; // cambia a true si quieres recordar login
+  if(!PERSIST_SESSION){ try { localStorage.removeItem('hoho3d_user'); } catch {} }
     // Nitidez pixel
     this.cameras.main.roundPixels = true;
     // Desactivar smoothing canvas 2D
@@ -60,9 +67,9 @@ export default class MenuScene extends Phaser.Scene {
       this.logo = this.add.image(0,0,'logo_placeholder_auto').setOrigin(0.5);
     }
     this.uiRoot.add(this.logo);
-    // Usuario activo label
-    this.userLabel = this.add.bitmapText(0,0,"casual","",18).setTint(0xa8c6dd).setOrigin(0.5,0).setDepth(11);
-    this.uiRoot.add(this.userLabel);
+  // Usuario activo label (se mantiene oculto; reemplazado por UserPanel)
+  this.userLabel = this.add.bitmapText(0,0,"casual","",18).setTint(0xa8c6dd).setOrigin(0.5,0).setDepth(11).setVisible(false);
+  this.uiRoot.add(this.userLabel);
 
     // UI Factory & sesión
     const UI = new PixelUiFactory(this,4);
@@ -96,10 +103,13 @@ export default class MenuScene extends Phaser.Scene {
 
     this.createVolumeButton();
 
-    // Leaderboard
+  // Nuevo UserPanel Supabase si hay usuario en localStorage
+  try { await this.ensureUserPanel(); } catch(e){ console.warn('UserPanel init fail', e); }
+
+  // Leaderboard
     const sideW = 200;
     this.leader = new LeaderboardPanel(this, {
-      x: W - sideW - 36,
+      x: W - sideW - 66,
       y: Math.max(72, this.logo.y - this.logo.displayHeight/2),
       maxW: sideW,
       title: "RANKING SEMANAL",
@@ -116,176 +126,50 @@ export default class MenuScene extends Phaser.Scene {
     this.layoutMenu();
     this.updateUserLabel();
     this.ensureZOrder();
-    this.scale.on('resize', ()=> { this.layoutMenu(); this.ensureZOrder(); });
+  this.raiseMenu();
+  this.scale.on('resize', ()=> { this.layoutMenu(); this.ensureZOrder(); this.raiseMenu(); });
     this.input.on('pointerdown', (p)=> console.log('[Input] pointerdown at', p.x, p.y));
 
     // Badge Supabase
     this.addSupabaseBadge();
 
-    // Atajo F2 logout
-    this.input.keyboard?.on('keydown-F2', ()=> {
-      try { localStorage.removeItem('hoho3d_user'); localStorage.removeItem('hoho3d_local_users'); } catch(_) {}
-      this.session = null; authLogout?.();
-      this.buildButtons(); this.updateUserLabel(); this.layoutMenu();
-    });
 
-  // Intro fullscreen (nuevo) si corresponde mostrar
-  this.maybeShowIntroFullscreen();
+    // IntroPlayer (tarjeta flotante) si corresponde mostrar
+    try {
+      let force = false;
+      try { const qs = new URLSearchParams(location.search); force = qs.get('intro')==='1'; } catch {}
+      if (IntroPlayer.shouldShow(force) && this.cache.video.exists('intro_vid') && this.cache.audio.exists('intro_bgm')) {
+        this.introPlayer = new IntroPlayer(this, { anchor:'top', maxW:0.58, maxH:0.42, rememberMs:24*60*60*1000 });
+        this.events.once('intro:closed', ()=> { /* opcional: reactivar efectos */ });
+      }
+    } catch(e){ console.warn('IntroPlayer init fallo', e); }
+  }
+
+  async ensureUserPanel(){
+    // Detectar sesión y crear o actualizar panel
+    let rawUser=null; try{ rawUser = JSON.parse(localStorage.getItem('hoho3d_user')||'null'); }catch{}
+    const userId = rawUser?.user_id || rawUser?.id;
+    if(!userId){ if(this.userPanel){ try{ this.userPanel.root?.destroy(true); }catch{} this.userPanel=null; } return; }
+    if(this.userPanel && this.userPanel.userId===userId){
+      // refrescar datos en lugar de recrear
+      try { await this.userPanel.refresh(); } catch(e){ console.warn('UserPanel refresh fail', e); }
+      return;
+    }
+    // destruir antiguo si usuario cambia
+    if(this.userPanel){ try{ this.userPanel.root?.destroy(true); }catch{} this.userPanel=null; }
+  // Posición final deseada (antes era dinámica causando "salto" visual). La fijamos.
+    const finalY = Math.max(40, Math.floor(this.scale.gameSize.height * 0.18));
+    this.userPanel = new UserPanel(this, { userId, x:24, y:finalY, w:300 });
+    // Pre-cargar avatar de la sesión (si existe) para feedback inmediato antes del fetch remoto.
+    try {
+      const ses = JSON.parse(localStorage.getItem('hoho3d_user')||'null');
+      if(ses?.avatar_url){ this.userPanel._loadAvatar(ses.avatar_url); }
+    } catch {}
+    await this.userPanel.refresh();
+  // Sin listener de resize para que permanezca estático.
   }
 
   // (Lógica de intro eliminada completamente)
-  static INTRO_SEEN_KEY = 'intro_fullscreen_seen_until';
-
-  introShouldShow(force=false){
-    if(force) return true;
-    try { const until = Number(localStorage.getItem(MenuScene.INTRO_SEEN_KEY)||'0'); return !(until && Date.now() < until); } catch { return true; }
-  }
-
-  maybeShowIntroFullscreen(){
-    let force=false; try { const qs=new URLSearchParams(location.search); force = qs.get('intro')==='1'; } catch {}
-  // Aceptar cualquiera de los dos formatos cargados (mp4 / webm)
-  const hasMp4 = this.cache.video.exists('intro_vid');
-  const hasWebm = this.cache.video.exists('intro_vid_webm');
-  if(!(hasMp4||hasWebm) || !this.cache.audio.exists('intro_bgm')) return;
-    if(!this.introShouldShow(force)) return;
-    this.showIntroFullscreen();
-  }
-
-  showIntroFullscreen(){
-    const W=this.scale.width, H=this.scale.height;
-    const sm = (()=>{ try { return getSoundManager(this); } catch(_) { return null; } })();
-    try { sm?.setBgmVolume(0, { fade:400 }); } catch(_){ }
-    // Contenedor overlay
-    this.introOverlay = this.add.container(0,0).setDepth(6000);
-    // Fondo transparente (clics pasan al overlay pero no al menú)
-    const bg = this.add.rectangle(0,0,W,H,0x000000,0.0).setOrigin(0).setInteractive();
-    this.introOverlay.add(bg);
-    // Video cover mute (usamos audio separado)
-  this.introVideo = this.add.video(W/2, H/2, 'intro_vid').setOrigin(0.5).setDepth(6001).setMute(true).setLoop(false);
-  this.introVideo.once('play', ()=> { this.introHint?.setVisible(false); });
-  this.introVideo.on('error', (e)=> { console.warn('[IntroFull] video error', e); this.introHint?.setText('VIDEO ERROR'); });
-  this.introOverlay.add(this.introVideo);
-  // Guardar lista de fuentes disponibles para posible fallback
-  this._introSources = [];
-  if(this.cache.video.exists('intro_vid_webm')) this._introSources.push('intro_vid_webm');
-  if(this.cache.video.exists('intro_vid')) this._introSources.push('intro_vid');
-  this._introCurrentSource = this._introSources.find(s=> s.includes('webm')) || this._introSources[0];
-    this.fitCoverVideo(this.introVideo, W, H);
-    // Botón SALTAR (PixelUiFactory reutilizado)
-    const skipBtn = this.UI.makeButton(0,0,{ label:'SALTAR', theme:'amber', w:128, h:40, radius:14, size:20, paddingX:14, paddingY:6, pulseLight:false, onClick:()=> this.closeIntroFullscreen('skip') });
-    skipBtn.setDepth(6002);
-    this.introOverlay.add(skipBtn);
-    skipBtn.setPosition(W - skipBtn._btnW/2 - 20, 20 + skipBtn._btnH/2);
-    // Hint tap-to-start (por políticas de audio)
-    this.introHint = this.add.bitmapText(W/2, H/2, 'casual', 'TOCA PARA INICIAR', 28).setOrigin(0.5).setTint(0xcfe3ff).setDepth(6002);
-    this.introOverlay.add(this.introHint);
-    // Resize handler
-    this.scale.on('resize', this._introResize = (sz)=>{
-      bg.setSize(sz.width, sz.height);
-      this.fitCoverVideo(this.introVideo, sz.width, sz.height);
-      skipBtn.setPosition(sz.width - skipBtn._btnW/2 - 20, 20 + skipBtn._btnH/2);
-      this.introHint.setPosition(sz.width/2, sz.height/2);
-    });
-    // Audio
-    this.introSound = this.sound.add('intro_bgm', { loop:false, volume:1 });
-    this._introStarted = false;
-    this._introPlayAttempts = 0;
-    // --- DOM FALLBACK ---
-    const switchToDomFallback = () => {
-      if(this._introDomVideo || this._introUsingDom) return; // ya creado
-      this._introUsingDom = true;
-      try { this.introVideo.setVisible(false); } catch(_){ }
-      const vid = document.createElement('video');
-      vid.muted = true; vid.playsInline = true; vid.autoplay = false; vid.preload='auto'; vid.loop = false;
-      vid.style.position='fixed';
-      vid.style.left='0'; vid.style.top='0'; vid.style.width='100%'; vid.style.height='100%';
-      vid.style.objectFit='cover'; vid.style.zIndex='9998'; vid.style.pointerEvents='none';
-      // Fuentes
-      const order = [];
-      if(this._introSources.includes('intro_vid_webm')) order.push({ key:'intro_vid_webm', url:'assets/fondo/intro.webm' });
-      if(this._introSources.includes('intro_vid')) order.push({ key:'intro_vid', url:'assets/fondo/intro.mp4' });
-      order.forEach(o=>{ const src=document.createElement('source'); src.src=o.url; vid.appendChild(src); });
-      const onLoaded = () => { console.log('[IntroFull][DOM] metadata', vid.videoWidth, vid.videoHeight); };
-      vid.addEventListener('loadeddata', onLoaded, { once:true });
-      document.body.appendChild(vid);
-      this._introDomVideo = vid;
-      if(this._introStarted){
-        setTimeout(()=>{ vid.play().then(()=>{ this.introHint?.setVisible(false); }).catch(e=> console.warn('[IntroFull][DOM] play reject', e)); }, 50);
-      }
-      // Sincronizar fin con audio (simple: cuando termine cualquiera)
-      vid.addEventListener('ended', ()=> this.closeIntroFullscreen('end'));
-      console.warn('[IntroFull] Activado fallback DOM <video>');
-    };
-    const attemptPlay = ()=>{
-      this._introPlayAttempts++;
-      let promise;
-      try { promise = this.introVideo.play(false); } catch(e){ console.warn('[IntroFull] video.play throw', e); }
-      if(promise?.catch){ promise.catch(err=> console.warn('[IntroFull] video.play reject', err)); }
-      const el = this.introVideo.video;
-      if(el){
-        // Forzar atributos
-        el.muted = true; el.loop=false; el.playsInline = true; el.preload='auto';
-        if(el.readyState < 2){
-          el.addEventListener('loadeddata', ()=> { if(!el.paused && el.currentTime>0) return; attemptPlay(); }, { once:true });
-        } else if(el.paused){
-          el.play().catch(e=> console.warn('[IntroFull] element.play reject', e));
-        }
-      }
-      // Verificar avance de frames
-      this.time.delayedCall(600, ()=>{
-        const t = this.introVideo.getCurrentTime?.() || el?.currentTime || 0;
-        if(t < 0.05 && this._introPlayAttempts < 5){
-          console.log('[IntroFull] reintento', this._introPlayAttempts+1);
-          attemptPlay();
-        } else if(t < 0.05 && this._introPlayAttempts >= 5){
-          // Intentar cambiar de fuente si hay otra disponible que no hemos probado
-          const next = this._introSources.find(s=> s!==this._introCurrentSource);
-          if(next && this._introTriedFallback !== true){
-            console.warn('[IntroFull] Sin frames en', this._introCurrentSource, 'cambiando a', next);
-            this._introTriedFallback = true;
-            this._introCurrentSource = next;
-            try { this.introVideo.stop(); } catch(_){}
-            try {
-              this.introVideo.setTexture(next); // Phaser v3 permite cambiar key de video recargando elemento
-            } catch(e){ console.warn('[IntroFull] setTexture fallback error', e); }
-            this._introPlayAttempts = 0;
-            this.time.delayedCall(120, ()=> attemptPlay());
-          } else {
-            this.introHint.setText('VIDEO NO DISPONIBLE');
-            // Activar fallback DOM
-            switchToDomFallback();
-          }
-        }
-      });
-    };
-    const startPlayback = ()=>{
-      if(this._introStarted) return; this._introStarted=true;
-      try { this.sound.unlock?.(); } catch {}
-      this.introHint.setText('CARGANDO...');
-      try { this.introSound.play(); } catch(e){ console.warn('[IntroFull] sound.play error', e); }
-      attemptPlay();
-      if(this._introUsingDom && this._introDomVideo){
-        this._introDomVideo.play().catch(e=> console.warn('[IntroFull][DOM] play error', e));
-      }
-      this.introVideo.once('complete', ()=> this.closeIntroFullscreen('end'));
-      this.introSound.once('complete', ()=> this.closeIntroFullscreen('end'));
-    };
-    bg.on('pointerdown', startPlayback);
-    this.introVideo.setInteractive().on('pointerdown', startPlayback);
-    // Guardar visto al cerrar
-  }
-
-  closeIntroFullscreen(reason='end'){
-    if(!this.introOverlay) return;
-    try { localStorage.setItem(MenuScene.INTRO_SEEN_KEY, String(Date.now()+24*60*60*1000)); } catch {}
-    try { this.introVideo?.stop(); } catch(_){ }
-    try { this.introSound?.stop(); } catch(_){ }
-  if(this._introDomVideo){ try { this._introDomVideo.pause(); this._introDomVideo.remove(); } catch(_){} this._introDomVideo=null; }
-    if(this._introResize){ this.scale.off('resize', this._introResize); }
-    this.introOverlay.destroy(true); this.introOverlay=null;
-    this.events.emit('intro:closed', { reason });
-    try { const sm = getSoundManager(this); sm.setBgmVolume(0.3, { fade:600 }); } catch(_){ }
-  }
 
   createVolumeButton(){
     const size=38;
@@ -403,19 +287,19 @@ export default class MenuScene extends Phaser.Scene {
   // Colocar título estable relativamente alto y sólo bajar la tabla para mayor separación
   if (this.leader){
     if (this.leader.mode === 'sideWeekly'){
-      // Ancho mínimo basado en texto + pequeño padding
-      let sideW = 170;
+      // Calcular ancho base según título
+      let baseW = 170;
       try {
         const tBounds = this.leader.title.getTextBounds().local;
         const needed = tBounds.width + 14;
-        if (needed > sideW) sideW = Math.min(needed, W - 40);
+        if (needed > baseW) baseW = Math.min(needed, W - 40);
       } catch(_) {}
-      sideW = Phaser.Math.Clamp(sideW, 150, 200);
-      const gapToMenu = 24; // separación lateral al bloque de botones
-      const menuRight = centerX + (this.buttons[0]? this.buttons[0]._btnW/2 : 140);
-      const x = menuRight + gapToMenu;
-      const y = this.logo.y - this.logo.displayHeight*0.15; // alinear un poco más alto respecto al logo
-      this.leader.layout(x, y, sideW);
+      baseW = Phaser.Math.Clamp(baseW, 150, 200);
+  // Posición fija solicitada por el usuario para el inicio (top-left) del panel
+  let sideW = Math.min(baseW * 2, W - 60, 420);
+  const fixedX = 1028;
+  const fixedY = 288.2179199834489; // punto exacto provisto
+  this.leader.layout(fixedX, fixedY, sideW);
     } else {
       const panelW = Math.min(720, Math.floor(W*0.62));
       const panelY = Math.min(H - 280, firstY + gap*2 + 72);
@@ -445,6 +329,9 @@ export default class MenuScene extends Phaser.Scene {
       const fieldDefs = mode==='login'
         ? [ {k:'nombre', hint:'USUARIO'}, {k:'password', hint:'CONTRASEÑA', secret:true} ]
         : [ {k:'nombre', hint:'USUARIO'}, {k:'password', hint:'CONTRASEÑA', secret:true}, {k:'correo', hint:'CORREO'} ];
+      // Limpiar carets previos
+      if(this._inlineCarets){ this._inlineCarets.forEach(c=> c.destroy()); }
+      this._inlineCarets = [];
       fieldDefs.forEach((fd,idx)=>{
         const raw = data[fd.k]||'';
         const isFocus = (this.authInlineFocus===idx);
@@ -457,12 +344,31 @@ export default class MenuScene extends Phaser.Scene {
           if(fd.k==='password' && !this.authInlinePasswordTouched){ this.authInlineData.password=''; this.authInlinePasswordTouched=true; }
           this.buildButtons(); this.layoutMenu(); 
         } });
+        // Caret independiente para evitar cambio de ancho
+        if(isFocus){
+          const txtNode = btn.list.find(n=> n.type==='BitmapText');
+          const caret = this.add.bitmapText(0,0,'casual','_',18).setOrigin(0,0.5);
+          if(txtNode){
+            caret.x = txtNode.x + (txtNode.width/2) + 2; // colocar a la derecha del texto
+            caret.y = txtNode.y;
+          } else {
+            // campo vacío: colocar a la izquierda donde empieza el texto
+            caret.x = -btn._btnW/2 + 14; // paddingX aproximado
+            caret.y = 0;
+          }
+          caret.setAlpha(this._caretBlink? 1:0);
+          btn.add(caret);
+          this._inlineCarets.push(caret);
+        }
         this.buttons.push(btn);
       });
       if(mode==='login'){
-        // Botón sitio externo
-        const siteBtn = UI.makeButton(0,0,{ label:"HOHO3D.COM.AR", theme:"amber", w:baseW, h:baseH, radius, size:18, paddingX:14, paddingY:6, onClick:()=> window.open("https://hoho3d.com.ar","_blank") });
-        this.buttons.push(siteBtn);
+    // Botón ENTRAR + estado de error credenciales
+        const submitLabel = this.authInlineError? 'INVALIDO' : (this._submitting? '...' : 'ENTRAR');
+    const submitTheme = this.authInlineError? 'cobalt':'slate';
+    const submitBtn = UI.makeButton(0,0,{ label: submitLabel, theme: submitTheme, w:baseW, h:baseH, radius, size:18, paddingX:14, paddingY:6, letterSpacing:1, onClick:()=> this.inlineSubmit() });
+    const siteBtn = UI.makeButton(0,0,{ label:"HOHO3D.COM.AR", theme:"amber", w:baseW, h:baseH, radius, size:18, paddingX:14, paddingY:6, letterSpacing:1, onClick:()=> window.open("https://hoho3d.com.ar","_blank") });
+    this.buttons.push(submitBtn, siteBtn);
       } else {
         // Botón acción REGISTRAR
         const submitLabel = this.authInlineError? 'INVALIDO' : (this._submitting? '...' : 'REGISTRAR');
@@ -498,18 +404,34 @@ export default class MenuScene extends Phaser.Scene {
       const btnStart = UI.makeButton(0,0,{ label:"JUGAR", theme:"mint", w:baseW, h:baseH, radius, size:22, paddingX:14, paddingY:6, letterSpacing:1, onClick:startGame, pulseLight:false });
       const btnComm  = UI.makeButton(0,0,{ label:"COMUNIDAD", theme:"cobalt", w:baseW, h:baseH, radius, size:20, paddingX:14, paddingY:6, letterSpacing:1, onClick:()=> window.open("https://chat.whatsapp.com/EuOXrDjV6rPHiW29NFuK8F","_blank"), pulseLight:false });
       const btnSite  = UI.makeButton(0,0,{ label:"HOHO3D.COM.AR", theme:"amber", w:baseW, h:baseH, radius, size:18, paddingX:14, paddingY:6, letterSpacing:1, onClick:()=> window.open("https://hoho3d.com.ar","_blank"), pulseLight:false });
-  const btnLogout = UI.makeButton(0,0,{ label:"SALIR", theme:"slate", w:baseW, h:baseH-4, radius, size:18, paddingX:14, paddingY:4, letterSpacing:1, onClick:()=>{ authLogout(); this.session=null; this.buildButtons(); this.updateUserLabel(); this.layoutMenu(); }, pulseLight:false });
+  const btnLogout = UI.makeButton(0,0,{ label:"SALIR", theme:"slate", w:baseW, h:baseH-4, radius, size:18, paddingX:14, paddingY:4, letterSpacing:1, onClick:()=>{
+        authLogout();
+        this.session=null;
+        // Destruir panel usuario si existe
+        if(this.userPanel){ try{ this.userPanel.root?.destroy(true); }catch(_){} this.userPanel=null; }
+        // Reset modos inline / datos
+        this.authInlineMode=null; this.authInlineData={ nombre:"", password:"", correo:"" }; this.authInlineError='';
+        this.buildButtons(); this.updateUserLabel(); this.layoutMenu();
+      }, pulseLight:false });
       this.buttons.push(btnStart, btnComm, btnSite, btnLogout);
     }
     this.uiRoot.add(this.buttons);
+  this.raiseMenu();
   }
 
   updateUserLabel(){
-    if(this.session){
-      this.userLabel.setText(this.session.nombre?.toUpperCase() || "").setVisible(true);
-    } else {
-      this.userLabel.setText("").setVisible(false);
-    }
+  // Sincronizar panel de usuario
+  // Mantener compat si panel viejo existe (ya reemplazado)
+  if(this.userPanel?.refresh && this.userPanel.userId){ /* noop for now */ }
+  }
+
+  // Forzar que los botones del menú queden al frente si algo los tapa
+  raiseMenu(){
+    if(!this.buttons) return;
+  // No hace falta subir cada botón si el contenedor completo (uiRoot) está encima del userPanel.
+  // Aseguramos orden correcto:
+  if(this.userPanel?.root){ this.userPanel.root.setDepth(8); }
+  if(this.uiRoot){ this.uiRoot.setDepth(40); }
   }
 
   fitCoverVideo(video,W,H){
@@ -549,12 +471,20 @@ export default class MenuScene extends Phaser.Scene {
     if(mode==='register'){ this.authInlineData.password=''; this.authInlineData.correo=''; }
   this.authInlineError=''; this.authInlinePasswordTouched=false;
     this.authInlineFocus = 0;
+    // Iniciar parpadeo caret
+    if(!this._caretTimer){
+      this._caretTimer = this.time.addEvent({ delay:500, loop:true, callback:()=>{
+        if(!this.authInlineMode){ this._caretTimer.remove(false); this._caretTimer=null; return; }
+        this._caretBlink = !this._caretBlink; this.buildButtons(); this.layoutMenu();
+      }});
+    }
     this.buildButtons(); this.layoutMenu();
   }
   exitInlineMode(){
     if(this._inlineKeysActive){ window.removeEventListener('keydown', this._inlineKeyHandler); this._inlineKeysActive=false; }
     this.authInlineMode=null; this.buildButtons(); this.layoutMenu();
   if(this.authInlineMsg){ this.authInlineMsg.destroy(); this.authInlineMsg=null; }
+    if(this._caretTimer){ this._caretTimer.remove(false); this._caretTimer=null; }
   }
   // Caret timer eliminado (se reemplaza por cambio de alpha del texto)
   async inlineSubmit(){
@@ -566,7 +496,16 @@ export default class MenuScene extends Phaser.Scene {
       try {
         const { authLogin } = await import('../services/AuthFacade.js');
         const res = await authLogin({ nombre, password });
-  if(res.ok){ this.authInlineError=''; this.session=res.user; this.exitInlineMode(); this.updateUserLabel(); this.buildButtons(); this.layoutMenu(); }
+  if(res.ok){
+            this.authInlineError='';
+            this.session=res.user;
+            // Crear / refrescar panel de usuario en vivo
+            await this.ensureUserPanel();
+            this.exitInlineMode();
+            this.updateUserLabel();
+            this.buildButtons();
+            this.layoutMenu();
+          }
   else { this.authInlineError = res.error||'Error'; this.buildButtons(); this.layoutMenu(); }
       } finally { this._submitting=false; this.buildButtons(); this.layoutMenu(); }
     } else if(this.authInlineMode==='register'){
@@ -580,7 +519,13 @@ export default class MenuScene extends Phaser.Scene {
       try {
         const { authRegister } = await import('../services/AuthFacade.js');
         const res = await authRegister({ nombre, password, contacto: email.toLowerCase() });
-  if(res.ok){ this.authInlineError=''; this.session=res.user; this.exitInlineMode(); this.updateUserLabel(); }
+  if(res.ok){
+            this.authInlineError='';
+            this.session=res.user;
+            await this.ensureUserPanel();
+            this.exitInlineMode();
+            this.updateUserLabel();
+          }
   else { this.authInlineError=res.error||'Error'; }
       } finally { this._submitting=false; this.buildButtons(); this.layoutMenu(); }
     }

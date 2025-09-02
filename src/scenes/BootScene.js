@@ -46,10 +46,7 @@ export default class BootScene extends Phaser.Scene {
   this.load.audio('bgm_menu', 'assets/audio/menu.mp3');
   this.load.audio('bgm_gameplay', 'assets/audio/gameplay.mp3');
   // IntroPlayer assets (nuevo componente): video (streaming, loop false) + audio separado
-  // Intro video: usar 'loadeddata' y asBlob=true para asegurar metadata antes de mostrar
-  this.load.video('intro_vid', 'assets/fondo/intro.mp4', 'loadeddata', true, true);
-  // Variante WebM (si existe) para mayor compatibilidad (VP8/VP9)
-  this.load.video('intro_vid_webm', 'assets/fondo/intro.webm', 'loadeddata', true, true);
+  this.load.video('intro_vid', 'assets/fondo/intro.mp4', 'canplaythrough', false, true);
   this.load.audio('intro_bgm', ['assets/audio/intro.mp3']);
   }
   create(data) {

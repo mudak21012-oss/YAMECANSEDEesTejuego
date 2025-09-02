@@ -25,7 +25,7 @@ export class SupabaseAuthService {
   const { data:exists, error:errExists } = await this.sb.from(TABLES.users).select("id").eq("username", username).maybeSingle();
     if(errExists){ console.warn(errExists); return { ok:false, error:"Error lectura" }; }
     if(exists) return { ok:false, error:"Ya existe" };
-  const { data, error } = await this.sb.from(TABLES.users).insert({ username, contact:contacto||"", pass_hash }).select("id,username,contact").single();
+  const { data, error } = await this.sb.from(TABLES.users).insert({ username, contact:contacto||"", pass_hash }).select("id,username,contact,avatar_url,character").single();
     if(error){
       // Detectar falta de política INSERT (RLS)
       if(/permission denied/i.test(error.message) || error.code==='42501'){
@@ -33,7 +33,7 @@ export class SupabaseAuthService {
       }
       return { ok:false, error:error.message };
     }
-    const user = { id:data.id, nombre:data.username, contacto:data.contact, pass_hash };
+  const user = { id:data.id, nombre:data.username, contacto:data.contact, pass_hash, avatar_url:data.avatar_url||null, character:data.character||null };
     localStorage.setItem("hoho3d_user", JSON.stringify(user));
     return { ok:true, user };
   }
@@ -43,10 +43,10 @@ export class SupabaseAuthService {
     const username = this.norm(nombre);
     const pass_hash = await this.hash(password||"");
   console.log('[SupabaseAuth] login intento', username);
-  const { data, error } = await this.sb.from(TABLES.users).select("id,username,contact,pass_hash").eq("username", username).maybeSingle();
+  const { data, error } = await this.sb.from(TABLES.users).select("id,username,contact,pass_hash,avatar_url,character").eq("username", username).maybeSingle();
     if(error) return { ok:false, error:error.message };
     if(!data || data.pass_hash !== pass_hash) return { ok:false, error:"Credenciales" };
-    const user = { id:data.id, nombre:data.username, contacto:data.contact, pass_hash };
+  const user = { id:data.id, nombre:data.username, contacto:data.contact, pass_hash, avatar_url:data.avatar_url||null, character:data.character||null };
     localStorage.setItem("hoho3d_user", JSON.stringify(user));
     return { ok:true, user };
   }

@@ -10,9 +10,12 @@ export default class LeaderboardPanel {
     this.maxW = maxW;
     this.mode = mode; // 'standard' | 'compact2'
     if (this.mode === 'sideWeekly') {
+      // Configuración ajustada para más legibilidad, mayor espaciado y mejor contraste
       title = title || 'MEJORES PUNTOS DE LA SEMANA';
       subtitle = '';
-      this.sideCfg = { titleSize:16, rowSize:12, padX:6, padY:4, rowGap:2, maxRows:6 };
+  // headerInset controla el margen lateral interno de la "sombra" (barra del título)
+  // headerExtraH controla cuánto alto adicional se suma al alto del texto para la barra
+  this.sideCfg = { titleSize:20, rowSize:16, padX:20, padY:8, rowGap:20, maxRows:6, headerInset:4, headerExtraH:8 };
     }
     this.title = scene.add.bitmapText(0,0,"casual", title, this.mode==='sideWeekly'? (this.sideCfg.titleSize):36).setTint(0xffffff);
     this.sub   = scene.add.bitmapText(0,0,"casual", subtitle, this.mode==='sideWeekly'?0:20).setTint(0xcfe3ff).setVisible(this.mode!=='sideWeekly');
@@ -187,20 +190,64 @@ export default class LeaderboardPanel {
     }
     if (this.mode === 'sideWeekly'){
       const { padX, padY, rowGap, rowSize, maxRows } = { padX:this.sideCfg.padX, padY:this.sideCfg.padY, rowGap:this.sideCfg.rowGap, rowSize:this.sideCfg.rowSize, maxRows:this.sideCfg.maxRows };
-  const tB = this.safeBounds(this.title);
-      this.title.setPosition(padX, padY);
-      this.titleBg.setVisible(true).setPosition(padX-3, padY-2).setSize(this.maxW - padX*2 +6, tB.height+4);
-      const startY = padY + tB.height + 2;
+      const tB = this.safeBounds(this.title);
+      // Centrar título – barra ocupa TODO el ancho con más padding vertical y línea inferior sutil
+      const padTop = padY + -3; // ajuste vertical del título
+      this.title.setOrigin(0.5,0).setPosition(this.maxW/2, padTop);
+      // Ajustar barra para que quede dentro del marco usando sideCfg.headerInset
+  let innerMargin = (this.sideCfg && typeof this.sideCfg.headerInset === 'number') ? this.sideCfg.headerInset : 4;
+  // Achicar sombra 2% del ancho total (distribuido mitad a cada lado)
+  const shrinkPct = 0.02; // 2% total
+  const perSide = (this.maxW * shrinkPct) / 2;
+  innerMargin += perSide; // aplicar reducción agregando margen
+  const extraH = (this.sideCfg && typeof this.sideCfg.headerExtraH === 'number') ? this.sideCfg.headerExtraH : 8;
+  // Quitar la sombra/fondo del título (petición usuario)
+  this.titleBg.setVisible(false);
+      // Línea inferior dentro del mismo margen
+      if(!this._titleLine){
+        this._titleLine = this.scene.add.graphics().setDepth(this.titleBg.depth+1);
+        this.g.add(this._titleLine);
+      }
+  const dividerY = padTop + tB.height; // sin fondo, línea más pegada al texto
+  this._titleLine.clear().lineStyle(2,0xffffff,0.12).lineBetween(innerMargin, dividerY, this.maxW - innerMargin, dividerY);
+  const startY = dividerY + 6; // menor separación sin la sombra
       const visibleRows = Math.min(this.rows.length, maxRows);
+
+      const rankColW = 18; // ancho reservado para "n." + medal
+      const scoreRightPad = 2;
+      const scoreLeftPad = 10;
+
       this.rows.forEach((r,i)=>{
         if(i>=visibleRows){ r.bg.setVisible(false); r.rank.setVisible(false); r.name.setVisible(false); r.score.setVisible(false); return; }
-        const y = startY + i*(rowSize + rowGap) + rowSize/2 + 1;
+        const y = startY + i*(rowSize + rowGap) + rowSize/2;
         const baseX = padX;
-        r.bg.setPosition(baseX, y).setSize(this.maxW - padX*2, rowSize + 2);
+        const rowW = this.maxW - padX*2;
+        r.bg.setPosition(baseX, y).setSize(rowW, rowSize + 4);
         r.rank.setPosition(baseX + 2, y - rowSize/2 - 1);
-        r.name.setPosition(baseX + 26, y - rowSize/2 - 1);
+        // Score primero para conocer su ancho final
         const sw = r.score.getTextBounds().local.width;
-        r.score.setPosition(this.maxW - padX - sw - 2, y - rowSize/2 - 1);
+        r.score.setPosition(baseX + rowW - sw - scoreRightPad, y - rowSize/2 - 1);
+        // Ajustar nombre dinámicamente según espacio restante
+        const nameAvail = rowW - rankColW - sw - scoreLeftPad - scoreRightPad;
+        if(nameAvail > 20){
+          // Truncar si excede
+            let original = r._originalName || r.name.text;
+            if(!r._originalName) r._originalName = original; // guardar
+            // quitar posibles puntuaciones pre-existentes (por si ya truncado)
+            original = original.replace(/…$/,'');
+            r.name.setText(original);
+            // medir y truncar
+            let nb = r.name.getTextBounds().local.width;
+            if(nb > nameAvail){
+              const chars = original.split('');
+              while(chars.length && nb > nameAvail){
+                chars.pop();
+                r.name.setText(chars.join('') + '…');
+                nb = r.name.getTextBounds().local.width;
+              }
+            }
+        }
+        r.name.setPosition(baseX + rankColW + 6, y - rowSize/2 - 1);
       });
       const totalH = startY + visibleRows*(rowSize + rowGap) + padY;
       this.panel.setDisplaySize(this.maxW, totalH);

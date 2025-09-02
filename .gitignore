@@ -23,7 +23,9 @@ build/
 *.7z
 
 ## Git ignore backup repo data
+repo_prev_*/
 .git_prev_*/
+.git_backup_*/
 
 ## Environment / local secrets (add if used)
 .env
